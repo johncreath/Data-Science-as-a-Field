@@ -1,0 +1,247 @@
+---
+title: "Analysis of New York City Shooting Incidents from 2006 to Present"
+author: "John Creath"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+## Source of Analysis
+
+Data is supplied by the New York City Police Department and served up at [data.gov](https://catalog.data.gov/dataset/nypd-shooting-incident-data-historic).
+
+```{r setup, include=TRUE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+library(dplyr)
+library(tidyverse)
+library(lubridate)
+library(stringr)
+
+nypd_url_in <- "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?"
+
+nypd_file_names <- 
+     c("rows.csv")
+nypd_urls <- str_c(nypd_url_in, nypd_file_names)
+
+nypd_shootings <- read_csv(nypd_urls[1])
+
+nypd_shootings$OCCUR_DATE <- as.Date(nypd_shootings$OCCUR_DATE, format = "%m/%d/%Y")
+
+nypd_shootings <- nypd_shootings %>%
+     mutate(OCCUR_YEAR = lubridate::year(OCCUR_DATE))
+
+nypd_shootings$BORO <- str_to_title(nypd_shootings$BORO)
+
+nypd_shootings <- nypd_shootings %>%
+  mutate(VIC_SEX = ifelse(VIC_SEX == "M", "Male", ifelse(VIC_SEX == "F", "Female", "Unknown")))
+
+nypd_shootings <- nypd_shootings %>%
+  mutate(PERP_AGE_GROUP = if_else(
+    PERP_AGE_GROUP %in% c("1020", "940", "(null)", NA), 
+    "UNKNOWN", 
+    if_else(PERP_AGE_GROUP == "224", "18-24", PERP_AGE_GROUP)
+  ))
+
+nypd_shootings <- nypd_shootings %>%
+  mutate(VIC_AGE_GROUP = if_else(
+    VIC_AGE_GROUP %in% c("1022", "(null)", NA), 
+    "UNKNOWN", 
+    if_else(VIC_AGE_GROUP == "224", "18-24", VIC_AGE_GROUP)
+  ))
+
+nypd_shootings <- nypd_shootings %>%
+  mutate(OCCUR_HOUR = as.integer(format(strptime(OCCUR_TIME, format = "%H:%M:%S"), "%H")))
+
+```
+
+## Findings
+This analysis seeks to understand shootings in New York City, New York. 
+
+### History
+
+Since 2006, overall we can see that shootings in New York City have been generally decreasing. Much progress was made especially between the years of 2006 and 2019 to curb this form of violence seeing a 50% reduction in shootings. However, sadly with the arrival of the global COVID-19 pandemic we see an alarming resurgence that in essence unraveled the previous 10 years worth of work.
+
+```{r nypd_shootings_by_year, echo=TRUE, message=TRUE, warning=TRUE}
+
+# Group by year and count distinct INCIDENT_KEY
+shootings_by_year <- nypd_shootings %>%
+  group_by(OCCUR_YEAR) %>%
+  summarise(distinct_incidents = n_distinct(INCIDENT_KEY))
+
+# Create a ggplot for visualization
+ggplot(shootings_by_year, aes(x = OCCUR_YEAR, y = distinct_incidents)) +
+  geom_line() +
+  geom_point() +
+  labs(title = "NYPD Shootings Historical Trend by Year",
+       x = "Year",
+       y = "Distinct Incidents") +
+  theme_minimal()
+```
+
+While the resurgence of gun violence in New York City during the pandemic is disheartening, it is encouraging to see that since the height of the resurgence in 2021 we can see signs that perhaps NYC is heading back in the right direction. A 15% reduction in shootings can be observed between 2021 and 2022, a dramatic year-over-year decline that had not been seen in nearly 10 years.
+
+As we wrap the background and history of shootings in NYC it be helpful to understand the associated murder rate of these incidents. Since 2006 we see a murder rate of nearly 20%.
+
+```{r nypd_shootings_murders, echo=TRUE, message=TRUE, warning=TRUE}
+
+murder_flag_counts <- nypd_shootings %>%
+  group_by(STATISTICAL_MURDER_FLAG) %>%
+  summarize(distinct_incidents = n_distinct(INCIDENT_KEY))
+
+ggplot(murder_flag_counts, aes(x = "", y = distinct_incidents, fill = STATISTICAL_MURDER_FLAG)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar(theta = "y") +
+  labs(title = "Murder Rate of New York City Shootings",
+       fill = "Resulted in a Murder") +
+  theme_minimal() +
+  theme(axis.text = element_blank(),
+        axis.title = element_blank(),
+        legend.position = "right")
+
+```
+
+Plotting the murder rate by year does not yield any meaningful results. The rate fluctuates between 17-22% with no observed correlation to other dimensions. 
+
+### Distribution
+
+As the city allocates resources to help reduce the threat of gun violence it will be helpful to understand *where* the problem is most acute. The distribution of shootings by borough immediately draws our attention to the Bronx and Brooklyn, and for good reason.
+
+```{r nypd_shootings_dist, echo=TRUE, message=TRUE, warning=TRUE}
+
+nypd_shootings %>%
+  ggplot(aes(x = BORO, y = after_stat(count), fill = BORO)) +
+  geom_bar(stat = "count") +
+  labs(title = "New York City Shootings by Borough", x = "Borough", y = "Count of Shootings") +
+  theme(legend.position = "none")
+```
+
+But how significant are these numbers in light of the populations each borough represents? To answer this question, we take 2023 population estimates. Then we take the number of shootings per borough divided by the population to get shootings per capita, which will help contextualize these numbers.
+
+```{r nypd_shootings_per_capita, echo=TRUE, message=TRUE, warning=TRUE}
+
+# Source: https://www.citypopulation.de/en/usa/newyorkcity/
+ny_population_by_borough <- data.frame(
+  borough = c("Bronx", "Brooklyn", "Manhattan", "Queens", "Staten Island"),
+  population = c(1379946, 2590516, 1596273, 2278029, 491133))
+
+nypd_shootings_agg <- nypd_shootings %>%
+  group_by(BORO) %>%
+  summarize(distinct_incidents = n_distinct(INCIDENT_KEY))
+
+nypd_shootings_agg <- left_join(nypd_shootings_agg, ny_population_by_borough, by = c("BORO" = "borough"))
+
+nypd_shootings_agg <- nypd_shootings_agg %>%
+  mutate(shootings_per_capita = distinct_incidents / population)
+
+nypd_shootings_agg %>%
+  ggplot(aes(x = BORO, y = shootings_per_capita, fill = BORO)) +
+  geom_bar(stat = "sum") +
+  labs(title = "New York City Shootings Per Capita by Borough", x = "Borough", y = "Per Capita") +
+  theme(legend.position = "none")
+```
+
+This confirms that while gun violence is especially prominent in the Bronx and Brooklyn, when correlated with population, we see that the problem is most acute in the Bronx
+
+When it comes to who gun violence affects, we can see from the graph below that the victims of shootings in New York City are disproportionately male by a wide margin.
+
+```{r nypd_shootings_gender, echo=TRUE, message=TRUE, warning=TRUE}
+
+# Source: https://www.neilsberg.com/insights/new-york-ny-population-by-gender/
+ny_gender_distribution <- data.frame(
+  gender = c("Male", "Female"),
+  # population = c(4192240, 4543807),
+  percent_of_total = c(.4799, .5201),
+  disposition = c('Population'))
+
+nypd_shootings_by_victim_gender <- nypd_shootings %>%
+  group_by(VIC_SEX) %>%
+  rename(gender = VIC_SEX) %>%
+  filter(gender != "Unknown") %>%
+  summarize(distinct_incidents = n_distinct(INCIDENT_KEY)) %>%
+  mutate(percent_of_total = distinct_incidents / sum(distinct_incidents)) %>%
+  select(-distinct_incidents) %>%
+  mutate(disposition = "Shooting Victim")
+
+combined_gender_analysis <- bind_rows(
+  nypd_shootings_by_victim_gender,
+  ny_gender_distribution
+)
+
+ggplot(combined_gender_analysis, aes(x = gender, y = percent_of_total, fill = disposition)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "New York City Shootings by Victim Gender",
+       x = "Gender",
+       y = "Percent of Total",
+       fill = "Disposition") +
+  theme_minimal()
+
+```
+
+With respect to age of the perpetrator where the age is known, we see the following:
+
+```{r nypd_shootings_perp_age, echo=TRUE, message=TRUE, warning=TRUE}
+
+# Exclude "UNKNOWN" values
+filtered_perp_age <- nypd_shootings %>%
+  filter(PERP_AGE_GROUP != "UNKNOWN")
+
+# Create a bar plot with the filtered data
+ggplot(filtered_perp_age, aes(x = PERP_AGE_GROUP)) +
+  geom_bar() +
+  labs(title = "New York City Shootings by Perpetrator Age",
+       x = "Age Group",
+       y = "Distinct Incidents") +
+  theme_minimal()
+
+```
+
+With respect to age of the victim where the age is known, we see:
+
+```{r nypd_shootings_victim_age, echo=TRUE, message=TRUE, warning=TRUE}
+# Exclude "UNKNOWN" values
+filtered_vic_age <- nypd_shootings %>%
+  filter(VIC_AGE_GROUP != "UNKNOWN")
+
+# Create a bar plot
+ggplot(filtered_vic_age, aes(x = VIC_AGE_GROUP)) +
+  geom_bar() +
+  labs(title = "New York City Shootings by Victim Age",
+       x = "Age Group",
+       y = "Distinct Incidents") +
+  theme_minimal()
+
+```
+
+As NYPD considers how best to allocate resources from a scheduling perspective, understanding time-of-day when shootings are occurring is important. 
+
+```{r nypd_shootings_hour, echo=TRUE, message=TRUE, warning=TRUE}
+
+# Create a bar plot
+ggplot(nypd_shootings, aes(x = OCCUR_HOUR)) +
+  geom_bar() +
+  labs(title = "New York City Shootings by Hour",
+       x = "Hour",
+       y = "Distinct Incidents") +
+  theme_minimal()
+
+```
+
+Perhaps unsurprisingly we can see that 80% of shootings occur between the hours of 4PM and 5AM, and 63% between 9PM and 5AM. While inconvenient, these are the hours where having an alert police force is optimal for patrolling and responding to incidents.
+
+## Conclusion
+
+There are many reasons that gun violence occurs; it is a complex issue. This research does not even begin to scratch the surface of the many facets and correlations of this type of crime. But, hopefully it gives my audience at least a little more information about the topic than they had before reading it. 
+
+Data is one of the primary keys to unlocking solid decisions-making. So, some key takeaways for how the NYPD can engage their community around the issue of gun violence:
+
+1. Focus engagement especially with the male 18-44 population.
+2. Consider disproportionate scheduling of patrols for the hours between 9PM and 5AM.
+3. Direct more attention to The Bronx as the shootings per capita is higher in that borough than the rest.
+4. Know that the resurgence of shootings in 2020 was more likely to be correlated with the global pandemic and less likely the result of something the NYPD did wrong. Shootings are likely to continue to decrease over the coming years to pre-pandemic levels.
+
+### Biases
+
+* While on the surface the data strongly suggests that males 18-44 are statistically more likely to be involved in a shooting in New York City, either as a perpetrator or victim, it is possible that further study *could* suggest that by having NYPD engage a different segment of the population (for example: parents, partners, siblings of the male 18-44 population) it could yield equal or greater results in reducing gun violence with the male 18-44 population. It is my personal bias that police won't go wrong when they engage any at risk segment of the population, but that isn't to say there aren't other, effective strategies.
+* One technique employed in this analysis that I have found effective in *removing* biases within the data I'm analyzing is converting a measurement from one of raw volume and contextualizing it with some other control variable. This can be seen in the shootings per capita by borough metric where we divide the raw volume of shootings by the population which acts as a control to help us interpret the true severity of the volume.
