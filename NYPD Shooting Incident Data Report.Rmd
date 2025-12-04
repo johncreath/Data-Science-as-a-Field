@@ -27,32 +27,67 @@ nypd_urls <- str_c(nypd_url_in, nypd_file_names)
 
 nypd_shootings <- read_csv(nypd_urls[1])
 
-nypd_shootings$OCCUR_DATE <- as.Date(nypd_shootings$OCCUR_DATE, format = "%m/%d/%Y")
-
 nypd_shootings <- nypd_shootings %>%
-     mutate(OCCUR_YEAR = lubridate::year(OCCUR_DATE))
-
-nypd_shootings$BORO <- str_to_title(nypd_shootings$BORO)
-
-nypd_shootings <- nypd_shootings %>%
-  mutate(VIC_SEX = ifelse(VIC_SEX == "M", "Male", ifelse(VIC_SEX == "F", "Female", "Unknown")))
-
-nypd_shootings <- nypd_shootings %>%
-  mutate(PERP_AGE_GROUP = if_else(
-    PERP_AGE_GROUP %in% c("1020", "940", "(null)", NA), 
-    "UNKNOWN", 
-    if_else(PERP_AGE_GROUP == "224", "18-24", PERP_AGE_GROUP)
-  ))
-
-nypd_shootings <- nypd_shootings %>%
-  mutate(VIC_AGE_GROUP = if_else(
-    VIC_AGE_GROUP %in% c("1022", "(null)", NA), 
-    "UNKNOWN", 
-    if_else(VIC_AGE_GROUP == "224", "18-24", VIC_AGE_GROUP)
-  ))
-
-nypd_shootings <- nypd_shootings %>%
-  mutate(OCCUR_HOUR = as.integer(format(strptime(OCCUR_TIME, format = "%H:%M:%S"), "%H")))
+  
+  # --- Date & time cleaning ---
+  mutate(
+    OCCUR_DATE = as.Date(OCCUR_DATE, format = "%m/%d/%Y"),
+    OCCUR_YEAR = year(OCCUR_DATE),
+    OCCUR_HOUR = hour(hms(OCCUR_TIME))
+  ) %>%
+  
+  # --- Borough cleaning ---
+  mutate(
+    BORO = str_to_title(BORO)
+  ) %>%
+  
+  # --- Sex cleaning ---
+  mutate(
+    PERP_SEX = case_when(
+      PERP_SEX == "M" ~ "Male",
+      PERP_SEX == "F" ~ "Female",
+      TRUE ~ "Unknown"
+    ),
+    VIC_SEX = case_when(
+      VIC_SEX == "M" ~ "Male",
+      VIC_SEX == "F" ~ "Female",
+      TRUE ~ "Unknown"
+    )
+  ) %>%
+  
+  # --- Race cleaning ---
+  mutate(
+    PERP_RACE = case_when(
+      PERP_RACE %in% c("UNKNOWN", "(null)", NA) ~ "Unknown",
+      TRUE ~ str_to_title(str_to_lower(PERP_RACE))
+    ),
+    VIC_RACE = case_when(
+      VIC_RACE %in% c("UNKNOWN", "(null)", NA) ~ "Unknown",
+      TRUE ~ str_to_title(str_to_lower(VIC_RACE))
+    )
+  ) %>%
+  
+  # --- Age cleaning ---
+  mutate(
+    numeric_age_perp = suppressWarnings(as.numeric(PERP_AGE_GROUP)),
+    PERP_AGE_GROUP = case_when(
+      PERP_AGE_GROUP %in% c("(null)", NA) ~ "UNKNOWN",
+      !is.na(numeric_age_perp) & (numeric_age_perp < 0 | numeric_age_perp > 120) ~ "UNKNOWN",
+      PERP_AGE_GROUP == "224" ~ "18-24",
+      TRUE ~ PERP_AGE_GROUP
+    ),
+    
+    numeric_age_vic = suppressWarnings(as.numeric(VIC_AGE_GROUP)),
+    VIC_AGE_GROUP = case_when(
+      VIC_AGE_GROUP %in% c("1022", "(null)", NA) ~ "UNKNOWN",
+      !is.na(numeric_age_vic) & (numeric_age_vic < 0 | numeric_age_vic > 120) ~ "UNKNOWN",
+      VIC_AGE_GROUP == "224" ~ "18-24",
+      TRUE ~ VIC_AGE_GROUP
+    )
+  ) %>%
+  
+  # Drop helper numeric columns
+  select(-numeric_age_perp, -numeric_age_vic)
 
 ```
 
@@ -82,7 +117,7 @@ ggplot(shootings_by_year, aes(x = OCCUR_YEAR, y = distinct_incidents)) +
 
 While the resurgence of gun violence in New York City during the pandemic is disheartening, it is encouraging to see that since the height of the resurgence in 2021 we can see signs that perhaps NYC is heading back in the right direction. A 15% reduction in shootings can be observed between 2021 and 2022, a dramatic year-over-year decline that had not been seen in nearly 10 years.
 
-As we wrap the background and history of shootings in NYC it be helpful to understand the associated murder rate of these incidents. Since 2006 we see a murder rate of nearly 20%.
+As we wrap the background and history of shootings in NYC it could be helpful to understand the associated murder rate of these incidents. Since 2006 we see a murder rate of nearly 20%.
 
 ```{r nypd_shootings_murders, echo=TRUE, message=TRUE, warning=TRUE}
 
@@ -113,11 +148,17 @@ As the city allocates resources to help reduce the threat of gun violence it wil
 nypd_shootings %>%
   ggplot(aes(x = BORO, y = after_stat(count), fill = BORO)) +
   geom_bar(stat = "count") +
-  labs(title = "New York City Shootings by Borough", x = "Borough", y = "Count of Shootings") +
-  theme(legend.position = "none")
+  labs(
+    title = "New York City Shootings by Borough",
+    x = NULL,                 # remove x-axis title
+    y = "Count of Shootings"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")   # remove legend
+
 ```
 
-But how significant are these numbers in light of the populations each borough represents? To answer this question, we take 2023 population estimates. Then we take the number of shootings per borough divided by the population to get shootings per capita, which will help contextualize these numbers.
+But how significant are these numbers considering the populations each borough represents? To answer this question, we take 2023 population estimates. Then we take the number of shootings per borough divided by the population to get shootings per capita, which will help contextualize these numbers.
 
 ```{r nypd_shootings_per_capita, echo=TRUE, message=TRUE, warning=TRUE}
 
@@ -138,15 +179,20 @@ nypd_shootings_agg <- nypd_shootings_agg %>%
 nypd_shootings_agg %>%
   ggplot(aes(x = BORO, y = shootings_per_capita, fill = BORO)) +
   geom_bar(stat = "sum") +
-  labs(title = "New York City Shootings Per Capita by Borough", x = "Borough", y = "Per Capita") +
-  theme(legend.position = "none")
+  labs(
+    title = "New York City Shootings by Borough",
+    x = NULL,                 # remove x-axis title
+    y = "Count of Shootings"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")   # remove legend
 ```
 
-This confirms that while gun violence is especially prominent in the Bronx and Brooklyn, when correlated with population, we see that the problem is most acute in the Bronx
+This confirms that while gun violence is especially prominent in the Bronx and Brooklyn, when correlated with population, we see that the problem is most acute in the Bronx.
 
-When it comes to who gun violence affects, we can see from the graph below that the victims of shootings in New York City are disproportionately male by a wide margin.
+When it comes to who gun violence affects, we can see from the graphs below that the victims and perpetrators of shootings in New York City are disproportionately male by a wide margin.
 
-```{r nypd_shootings_gender, echo=TRUE, message=TRUE, warning=TRUE}
+```{r nypd_shootings_victim_gender, echo=TRUE, message=TRUE, warning=TRUE}
 
 # Source: https://www.neilsberg.com/insights/new-york-ny-population-by-gender/
 ny_gender_distribution <- data.frame(
@@ -164,12 +210,12 @@ nypd_shootings_by_victim_gender <- nypd_shootings %>%
   select(-distinct_incidents) %>%
   mutate(disposition = "Shooting Victim")
 
-combined_gender_analysis <- bind_rows(
+combined_victim_gender_analysis <- bind_rows(
   nypd_shootings_by_victim_gender,
   ny_gender_distribution
 )
 
-ggplot(combined_gender_analysis, aes(x = gender, y = percent_of_total, fill = disposition)) +
+ggplot(combined_victim_gender_analysis, aes(x = gender, y = percent_of_total, fill = disposition)) +
   geom_bar(stat = "identity", position = "dodge") +
   labs(title = "New York City Shootings by Victim Gender",
        x = "Gender",
@@ -178,8 +224,51 @@ ggplot(combined_gender_analysis, aes(x = gender, y = percent_of_total, fill = di
   theme_minimal()
 
 ```
+```{r nypd_shootings_perpetrator_gender, echo=TRUE, message=TRUE, warning=TRUE}
 
-With respect to age of the perpetrator where the age is known, we see the following:
+nypd_shootings_by_perpetrator_gender <- nypd_shootings %>%
+  group_by(PERP_SEX) %>%
+  rename(gender = PERP_SEX) %>%
+  filter(gender != "Unknown") %>%
+  summarize(distinct_incidents = n_distinct(INCIDENT_KEY)) %>%
+  mutate(percent_of_total = distinct_incidents / sum(distinct_incidents)) %>%
+  select(-distinct_incidents) %>%
+  mutate(disposition = "Shooting Perpetrator")
+
+combined_perpetrator_gender_analysis <- bind_rows(
+  nypd_shootings_by_perpetrator_gender,
+  ny_gender_distribution
+)
+
+ggplot(combined_perpetrator_gender_analysis, aes(x = gender, y = percent_of_total, fill = disposition)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "New York City Shootings by Perpetrator Gender",
+       x = "Gender",
+       y = "Percent of Total",
+       fill = "Disposition") +
+  theme_minimal()
+
+```
+
+
+With respect to age of the victims and perpetrators where the age is known, we see the following:
+
+```{r nypd_shootings_victim_age, echo=TRUE, message=TRUE, warning=TRUE}
+# Exclude "UNKNOWN" values
+filtered_vic_age <- nypd_shootings %>%
+  filter(VIC_AGE_GROUP != "UNKNOWN")
+
+# Create a bar plot
+ggplot(filtered_vic_age, aes(x = VIC_AGE_GROUP)) +
+  geom_bar() +
+  labs(title = "New York City Shootings by Victim Age",
+       x = "Age Group",
+       y = "Distinct Incidents") +
+  theme_minimal()
+
+```
+
+
 
 ```{r nypd_shootings_perp_age, echo=TRUE, message=TRUE, warning=TRUE}
 
@@ -197,34 +286,97 @@ ggplot(filtered_perp_age, aes(x = PERP_AGE_GROUP)) +
 
 ```
 
-With respect to age of the victim where the age is known, we see:
+With respect to race/ethnicity of the victims and perpetrators where the race/ethnicity is known, we see the following:
 
-```{r nypd_shootings_victim_age, echo=TRUE, message=TRUE, warning=TRUE}
-# Exclude "UNKNOWN" values
-filtered_vic_age <- nypd_shootings %>%
-  filter(VIC_AGE_GROUP != "UNKNOWN")
+```{r nypd_shootings_victim_race, echo=TRUE, message=TRUE, warning=TRUE}
+
+# Exclude "Unknown" values
+filtered_vic_race <- nypd_shootings %>%
+  filter(VIC_RACE != "Unknown")
 
 # Create a bar plot
-ggplot(filtered_vic_age, aes(x = VIC_AGE_GROUP)) +
+ggplot(filtered_vic_race, aes(x = VIC_RACE, fill = VIC_RACE)) +
   geom_bar() +
-  labs(title = "New York City Shootings by Victim Age",
-       x = "Age Group",
-       y = "Distinct Incidents") +
-  theme_minimal()
+  scale_fill_manual(values = c(
+    "#56B4E9", "#009E73", "#E69F00", 
+    "#F0E442", "#0072B2", "#D55E00", "#CC79A7"
+  )) +
+  labs(
+    title = "New York City Shootings by Victim Race/Ethnicity",
+    x = "Race/Ethnicity",
+    y = "Distinct Incidents",
+    fill = "Race/Ethnicity"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),  # angled labels
+    plot.title = element_text(hjust = 0.5)
+  ) +
+  scale_x_discrete(labels = function(x) stringr::str_wrap(x, width = 12))
+
+```
+
+With respect to age of the perpetrator where the race/ethnicity is known, we see:
+
+```{r nypd_shootings_perp_race, echo=TRUE, message=TRUE, warning=TRUE}
+
+# Exclude "Unknown" values
+filtered_perp_race <- nypd_shootings %>%
+  filter(PERP_RACE != "Unknown")
+
+# Create a bar plot
+ggplot(filtered_perp_race, aes(x = PERP_RACE, fill = PERP_RACE)) +
+  geom_bar() +
+  scale_fill_manual(values = c(
+    "#56B4E9", "#009E73", "#E69F00", 
+    "#F0E442", "#0072B2", "#D55E00", "#CC79A7"
+  )) +
+  labs(
+    title = "New York City Shootings by Perpetrator Race/Ethnicity",
+    x = "Race/Ethnicity",
+    y = "Distinct Incidents",
+    fill = "Race/Ethnicity"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),  # angled labels
+    plot.title = element_text(hjust = 0.5)
+  ) +
+  scale_x_discrete(labels = function(x) stringr::str_wrap(x, width = 12))
 
 ```
 
 As NYPD considers how best to allocate resources from a scheduling perspective, understanding time-of-day when shootings are occurring is important. 
-
 ```{r nypd_shootings_hour, echo=TRUE, message=TRUE, warning=TRUE}
 
-# Create a bar plot
+hour_counts <- nypd_shootings %>%
+  count(OCCUR_HOUR)
+
+min_hour <- hour_counts$OCCUR_HOUR[which.min(hour_counts$n)]
+
+rotated_hours <- c(min_hour:23, 0:(min_hour-1))
+
+nypd_shootings <- nypd_shootings %>%
+  mutate(
+    OCCUR_HOUR = factor(
+      OCCUR_HOUR,
+      levels = rotated_hours,
+      labels = format(strptime(rotated_hours, format = "%H"), "%I %p")
+    )
+  )
+
 ggplot(nypd_shootings, aes(x = OCCUR_HOUR)) +
   geom_bar() +
-  labs(title = "New York City Shootings by Hour",
-       x = "Hour",
-       y = "Distinct Incidents") +
-  theme_minimal()
+  labs(
+    title = "New York City Shootings by Hour",
+    x = "Hour",
+    y = "Distinct Incidents"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
 
 ```
 
